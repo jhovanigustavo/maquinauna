@@ -1,0 +1,55 @@
+Rg = 'Avanade_Sec'
+$Vnet = 'Avanade-vnet'
+$subnet = 'Avanade-subnet'
+$IPP = 'Avanade-IP-Public'
+$Nic = 'NicVM-Avanade'
+
+# crear un grupo de recursos 
+New-AzResourceGroup -Name $Rg -Location EastUS
+
+# Create a subnet configuration
+$subnet = New-AzVirtualNetworkSubnetConfig -Name $subnet -AddressPrefix 192.168.0.0/24
+
+# Create a virtual network
+$Vnet = New-AzVirtualNetwork -ResourceGroupName $Rg -Location EastUS -Name $Vnet -AddressPrefix 192.168.0.0/16 -Subnet $subnet
+
+
+# Create a public IP address and specify a DNS name
+$IPP = New-AzPublicIpAddress -ResourceGroupName $Rg -Location EastUS -AllocationMethod Static -IdleTimeoutInMinutes 4 -Name $IPP
+
+
+# obtiene  el  NSG y agrega  una nueva regla 
+$NSGRuleRDP = New-AzNetworkSecurityRuleConfig -Name $Rg -Protocol Tcp -Direction Inbound -Priority 1000 -SourceAddressPrefix * -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 3389 -Access Allow
+
+# Create a network security group
+$NSG = New-AzNetworkSecurityGroup -ResourceGroupName $Rg -Location EastUS -Name 'NSG-Avanade' -SecurityRules $NSGRuleRDP
+
+#crear una nic
+$Nic = New-AzNetworkInterface -ResourceGroupName $Rg -Location EastUS -Name $Nic -SubnetId $Vnet.Subnets[0].Id -PublicIpAddressId $IPP.Id
+
+
+#Asignando NSG a la interface de red
+$Nic.NetworkSecurityGroup = $NSG
+$Nic | Set-AzNetworkInterface
+
+
+# Create a storage Account
+New-AzStorageAccount -ResourceGroupName $Rg -AccountName "storageavangst" -Location EastUS -Type Premium_LRS
+$storage1ps = Get-AzStorageAccount -ResourceGroupName $Rg -AccountName "storageavangst"
+
+
+
+#crear  una AVS
+$AvailabilitySet = New-AzAvailabilitySet -ResourceGroupName $Rg -Name "AV-VM-Avanade" -Location "EastUS"
+
+# Define a credential object #Configuracion VM
+$cred = Get-Credential
+$vm = New-AzVMConfig -VMName AvanadeVM -VMSize Standard_D8_v3 -AvailabilitySetID $AvailabilitySet.Id | 
+Set-AzVMOperatingSystem -Windows -ComputerName AvanadeVM -Credential $cred | 
+Set-AzVMSourceImage -PublisherName MicrosoftWindowsServer -Offer WindowsServer -Skus 2019-Datacenter -Version latest | 
+Add-AzVMNetworkInterface -Id $Nic.Id    
+$blobPath = "adds/AD-vhd01.vhd"
+$osDiskUri = $storage1ps.PrimaryEndpoints.Blob.ToString() + $blobPath
+$diskName = "AD-vhd01.vhd"
+$vm = Set-AzVMOSDisk -VM $vm -Name $diskName -VhdUri $osDiskUri -CreateOption fromImage 
+New-AzVM -ResourceGroupName $rg -Location EastUS -VM $vm
